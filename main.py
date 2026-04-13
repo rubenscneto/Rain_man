@@ -60,7 +60,10 @@ def build_config(args) -> RainManConfig:
     cfg.monte_carlo = MonteCarloConfig(
         num_simulations=args.hands,
     )
-    cfg.counting = CountingSystem(name=args.system)
+    # Load BSE for the configured casino rules
+    from ml.advantage_calc import CASINO_RULES, DEFAULT_RULES
+    rules = CASINO_RULES.get(cfg.casino_rules_key, DEFAULT_RULES)
+    cfg.counting = CountingSystem(name=args.system, bse=rules.bse)
     return cfg
 
 
@@ -246,13 +249,46 @@ def mode_manual(cfg: RainManConfig) -> None:
                 else:
                     print("No model trained yet. Run: python main.py --mode train")
 
+            elif cmd in ("advantage", "adv", "edge"):
+                # Show exact Hi-Opt I/II advantage at current TC
+                from ml.advantage_calc import AdvantageCalculator, CASINO_RULES
+                rules = CASINO_RULES.get(cfg.casino_rules_key)
+                if rules:
+                    calc = AdvantageCalculator(rules)
+                    calc.print_ev_table()
+                    rep = calc.report(counter.true_count, bankroll,
+                                      cfg.betting.min_bet, cfg.betting.max_bet)
+                    if console:
+                        col = "green" if rep.advantage_pct > 0 else "red"
+                        console.print(f"\n[{col}]{rep}[/{col}]")
+                    else:
+                        print(f"\n{rep}")
+
+            elif cmd in ("compare", "systems"):
+                from ml.advantage_calc import AdvantageCalculator
+                AdvantageCalculator.compare_rule_sets()
+
+            elif cmd in ("systems", "list"):
+                from counting import list_systems
+                list_systems()
+
             elif cmd in ("help", "?"):
                 from ui.manual_input import HELP_TEXT
-                print(HELP_TEXT)
+                extra = (
+                    "\nExtra commands:\n"
+                    "  advantage / adv   → Show exact EV table (BSE + 0.515×TC)\n"
+                    "  compare           → Compare all casino rule sets\n"
+                    "  systems           → List all counting systems\n"
+                    "  insurance         → Should I take insurance?\n"
+                )
+                print(HELP_TEXT + extra)
 
             elif cmd in ("insurance",):
-                take = strategy.should_take_insurance(counter)
-                msg = "TAKE insurance (TC >= +3)" if take else "DECLINE insurance"
+                if hasattr(counter, "should_take_insurance"):
+                    take = counter.should_take_insurance()
+                else:
+                    take = counter.true_count >= 3
+                msg = "TAKE insurance (TC >= +3, deck is 10-rich)" if take else "DECLINE insurance"
                 if console:
                     col = "green" if take else "red"
                     console.print(f"[{col}]{msg}[/{col}]")
@@ -503,8 +539,10 @@ def parse_args():
                         help="Number of decks in shoe (default: 6)")
     parser.add_argument("--penetration", type=float, default=0.75,
                         help="Shoe penetration 0.5–0.85 (default: 0.75)")
-    parser.add_argument("--system", choices=["hi_lo", "ko", "omega2"], default="hi_lo",
-                        help="Card counting system (default: hi_lo)")
+    parser.add_argument("--system",
+                        choices=["hi_lo", "ko", "hi_opt1", "hi_opt2", "omega2"],
+                        default="hi_opt1",
+                        help="Card counting system (default: hi_opt1 — Humble & Cooper)")
     parser.add_argument("--bankroll", type=float, default=1000.0,
                         help="Starting bankroll in units (default: 1000)")
     parser.add_argument("--min-bet", type=float, default=10.0, dest="min_bet")

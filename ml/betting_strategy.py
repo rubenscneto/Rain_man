@@ -1,14 +1,18 @@
 """
 Betting Strategy Engine.
 
-Combines:
-  1. OLS-predicted EV (from Monte Carlo training)
-  2. Kelly Criterion (optimal bet sizing under uncertainty)
-  3. Count-based bet spread (practical ramp)
-  4. Index plays (deviations from basic strategy)
+Combines (in priority order):
+  1. Hi-Opt I/II exact advantage formula: BSE + 0.515 × TC (Humble & Cooper)
+  2. OLS-predicted EV (from Monte Carlo training) — cross-validation
+  3. Kelly Criterion (Humble & Cooper p.497-502) for optimal bet sizing
+  4. Count-based bet spread (practical ramp for live play)
+  5. Index plays (deviations from basic strategy — Hi-Opt I tables)
 
 The goal: translate the true count into a recommended bet size and
 any strategy deviations — in real time during live play.
+
+"Betting your bankroll over and over [with Hi-Opt I], it is all you need
+to turn your original stake into a blob." — Humble & Cooper, p.558
 """
 
 from __future__ import annotations
@@ -84,14 +88,33 @@ class BettingStrategy:
         pen = counter.shoe.penetration_reached
         cfg = self.config
 
-        # 1. Get EV from OLS model (if trained)
+        # 1. Exact advantage from Hi-Opt I/II formula if available
+        #    (Humble & Cooper: Advantage = BSE + 0.515 × TC, p.514-516)
+        exact_ev = None
+        if hasattr(counter, "player_advantage"):
+            exact_ev = counter.player_advantage / 100.0  # convert % to fraction
+
+        # 2. Get EV from OLS model (cross-validation / training-based)
         if self.ols_results is not None:
-            predicted_ev = self.ols_results.predict_ev(tc)
+            ols_ev = self.ols_results.predict_ev(tc)
             confidence = self.ols_results.r_squared
         else:
-            # Fallback: empirical approximation (Hi-Lo ~0.5% per TC unit above 1)
-            predicted_ev = 0.005 * (tc - 1.0) - 0.005  # ~-0.5% at TC=0
+            ols_ev = None
             confidence = 0.0
+
+        # 3. Blend: Hi-Opt formula takes priority (it's based on Griffin's analysis);
+        #    OLS adds Monte Carlo validation; fallback is empirical approximation.
+        if exact_ev is not None:
+            predicted_ev = exact_ev
+            if ols_ev is not None and abs(exact_ev - ols_ev) < 0.05:
+                # Both agree — high confidence; slight blend for stability
+                predicted_ev = 0.7 * exact_ev + 0.3 * ols_ev
+        elif ols_ev is not None:
+            predicted_ev = ols_ev
+        else:
+            # Last resort: empirical approximation (~0.5% per TC unit)
+            bse = cfg.counting.bse / 100.0
+            predicted_ev = bse + 0.00515 * tc
 
         has_edge = predicted_ev > 0
 

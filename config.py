@@ -10,6 +10,11 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
+# Casino rule set keys (see ml/advantage_calc.py for full definitions)
+# Choose the one that matches where you'll be playing.
+CASINO_RULE_KEY: str = "typical_6d_h17_das"
+
+
 @dataclass
 class ShoeConfig:
     """Configuration for the card shoe (a caixinha de cartas)."""
@@ -84,7 +89,16 @@ class ScreenReaderConfig:
 
 @dataclass
 class CountingSystem:
-    name: Literal["hi_lo", "ko", "omega2"] = "hi_lo"
+    # Systems ordered by complexity/power:
+    #   hi_lo    — simplest, good for beginners (Hi-Lo balanced)
+    #   ko       — unbalanced, no true count needed
+    #   hi_opt1  — Humble & Cooper primary system (most recommended)
+    #   hi_opt2  — Level-2, most powerful, harder to use
+    #   omega2   — Multi-level balanced alternative
+    name: Literal["hi_lo", "ko", "hi_opt1", "hi_opt2", "omega2"] = "hi_opt1"
+    # BSE for the casino you're playing at (used by Hi-Opt I/II advantage formula)
+    # Overridden automatically if casino_rules_key is set in RainManConfig
+    bse: float = -0.54   # Default: typical 6-deck H17 game
 
 
 @dataclass
@@ -97,6 +111,9 @@ class RainManConfig:
     ml: MLConfig = field(default_factory=MLConfig)
     screen: ScreenReaderConfig = field(default_factory=ScreenReaderConfig)
     counting: CountingSystem = field(default_factory=CountingSystem)
+    # Casino rules key — matches keys in ml/advantage_calc.py CASINO_RULES dict
+    # Set this to match the casino where you're playing for accurate edge calculations.
+    casino_rules_key: str = CASINO_RULE_KEY
     verbose: bool = True
 
 
