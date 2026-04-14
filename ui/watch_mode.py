@@ -80,6 +80,9 @@ class WatchSession:
         self._running = False
         self._console = Console() if RICH_AVAILABLE else None
 
+        # Última estimativa de baralhos (do detector durante mistura)
+        self._deck_estimate_str: str = ""
+
         # OCR detector
         self._ocr_thread: Optional[threading.Thread] = None
         self._ocr_available = False
@@ -102,6 +105,7 @@ class WatchSession:
                 poll_ms=self.config.screen.capture_interval_ms,
                 on_card=self._on_card_ocr,
                 on_new_round=self._on_new_round,
+                on_deck_estimate=self._on_deck_estimate,
             )
             self._ocr_available = self._detector.is_available()
         except Exception as e:
@@ -138,6 +142,14 @@ class WatchSession:
         with self._lock:
             self.cards_this_round.clear()
             self.round_num += 1
+
+    def _on_deck_estimate(self, estimate) -> None:
+        """Called when OCR estimates deck count after a shuffle."""
+        with self._lock:
+            conf = f"{estimate.confidence:.0%}"
+            self._deck_estimate_str = (
+                f"~{estimate.estimated_decks} baralhos ({conf} confiança)"
+            )
 
     def _on_control(self, cmd: str) -> None:
         """Called by hotkey listener for control keys."""
@@ -256,6 +268,12 @@ class WatchSession:
                 else "[yellow]OCR OFF — hotkeys only[/yellow]"
             )
 
+            # Deck estimate (shown after first shuffle)
+            deck_str = (
+                f"  [dim]Baralhos estimados: {self._deck_estimate_str}[/dim]\n"
+                if self._deck_estimate_str else ""
+            )
+
             # Insurance
             ins_advice = ""
             if hasattr(self.counter, "should_take_insurance"):
@@ -267,16 +285,17 @@ class WatchSession:
                 f"  [{tc_col}]{bar}[/{tc_col}]\n"
                 f"  RC: [bold]{rc:+d}[/bold]   "
                 f"TC: [{tc_col}]{tc:+.2f}[/{tc_col}]   "
-                f"Decks: {decks:.1f}   "
-                f"Round #{self.round_num}\n\n"
+                f"Decks restantes: {decks:.1f}   "
+                f"Rodada #{self.round_num}\n\n"
                 f"  [{ev_col}]EV: {ev:+.3%}[/{ev_col}]   "
-                f"[bold cyan]BET: ${rec.recommended_bet:.0f}[/bold cyan]"
-                f"  ({rec.bet_units:.0f} units)"
+                f"[bold cyan]APOSTAR: ${rec.recommended_bet:.0f}[/bold cyan]"
+                f"  ({rec.bet_units:.0f} unidades)"
                 f"{ins_advice}\n\n"
-                f"  Cards this round: {round_str or '—'}\n"
-                f"  Last: {last_str}    {ocr_status}\n\n"
-                f"  [dim]Hotkeys: 3-9=card  t=10-value  a=Ace  "
-                f"n=next  s=shuffle  Esc=quit[/dim]\n"
+                f"  Cartas desta rodada: {round_str or '—'}\n"
+                f"  Última: {last_str}    {ocr_status}\n"
+                f"{deck_str}"
+                f"\n  [dim]Teclas: 3-9=carta  t=10/J/Q/K  a=Ás  "
+                f"n=próxima  s=embaralhar  Esc=sair[/dim]\n"
             )
 
             border = "green" if ev > 0 else "red"

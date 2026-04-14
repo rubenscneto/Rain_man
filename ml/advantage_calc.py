@@ -125,9 +125,22 @@ CASINO_RULES: dict[str, CasinoRules] = {
         surrender="none", blackjack_payout=1.2,  # 6:5 payout!
         bse=-1.39,   # The 6:5 BJ rule alone costs ~1.4%
     ),
+    # ── Evolution Gaming — identificado nos prints do usuário ──────────
+    # Regras visíveis: "Dealer must stand on 17" (S17), "BLACKJACK PAYS 3:2",
+    # "INSURANCE PAYS 2 TO 1". Baralhos estimados visualmente: 8.
+    # S17 é MELHOR para o jogador que H17 (+0.14% ao BSE).
+    "evolution_8d_s17_das": CasinoRules(
+        name="Evolution Gaming Blackjack A — 8 baralhos S17 DAS 3:2",
+        num_decks=8, dealer_hits_soft17=False,   # S17: dealer PARA no 17 mole
+        double_after_split=True, resplit_aces=False,
+        surrender="late", blackjack_payout=1.5,
+        bse=-0.43,   # Ponto de equilíbrio: TC = +0.43/0.515 ≈ TC+0.83
+        # Melhor que 6d H17 (-0.54%): menos baralhos importam menos,
+        # mas a regra S17 compensa a desvantagem dos 8 baralhos.
+    ),
 }
 
-DEFAULT_RULES = CASINO_RULES["typical_6d_h17_das"]
+DEFAULT_RULES = CASINO_RULES["evolution_8d_s17_das"]
 
 
 # ---------------------------------------------------------------------------

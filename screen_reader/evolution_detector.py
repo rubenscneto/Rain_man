@@ -49,6 +49,7 @@ except ImportError:
 from simulator.deck import Card, RANKS
 from screen_reader.capture import ScreenCapture, CaptureRegion
 from screen_reader.card_detector import DetectedCard, parse_card_text
+from screen_reader.deck_estimator import DeckEstimator, DeckEstimate
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +80,7 @@ class GameFrame:
     cards_detected: List[DetectedCard] = field(default_factory=list)
     scores_detected: List[int] = field(default_factory=list)    # e.g. [18, 16, 12]
     new_round_detected: bool = False    # "PRÓXIMO JOGO EM BREVE" visible
+    shuffle_detected: bool = False      # "MISTURA EM ANDAMENTO" visible
     frame_hash: int = 0                 # used for change detection
 
     @property
@@ -109,7 +111,8 @@ class EvolutionDetector:
     def __init__(self, region: Optional[CaptureRegion] = None,
                  poll_ms: int = 300,
                  on_card: Optional[Callable[[DetectedCard], None]] = None,
-                 on_new_round: Optional[Callable[[], None]] = None):
+                 on_new_round: Optional[Callable[[], None]] = None,
+                 on_deck_estimate: Optional[Callable[["DeckEstimate"], None]] = None):
         """
         Parameters
         ----------
@@ -121,15 +124,23 @@ class EvolutionDetector:
             Called with DetectedCard whenever a new card is detected.
         on_new_round : callable
             Called when "PRÓXIMO JOGO EM BREVE" / new round is detected.
+        on_deck_estimate : callable
+            Called with DeckEstimate at the end of each shuffle phase.
         """
         self.capture = ScreenCapture(region)
         self.poll_ms = poll_ms
         self.on_card = on_card
         self.on_new_round = on_new_round
+        self.on_deck_estimate = on_deck_estimate
         self._prev_frame: Optional[np.ndarray] = None
         self._prev_cards: List[str] = []   # str(card) of already-counted cards
         self._running = False
         self._available = CV2_AVAILABLE and TESS_AVAILABLE
+
+        # Deck estimator — accumulates measurements during shuffle phase
+        self._deck_estimator = DeckEstimator()
+        self._in_shuffle = False           # True while "MISTURA EM ANDAMENTO" active
+        self.last_deck_estimate: Optional[DeckEstimate] = None
 
         if not self._available:
             print("[EvolutionDetector] OpenCV or Tesseract not available.")
@@ -183,12 +194,32 @@ class EvolutionDetector:
         if frame is None:
             return
 
-        # Detect new round
+        # ── Shuffle phase handling ──────────────────────────────────────
+        if frame.shuffle_detected:
+            if not self._in_shuffle:
+                # Mistura acabou de começar → resetar acumulador
+                self._in_shuffle = True
+                self._deck_estimator.reset()
+                print("[EvolutionDetector] Mistura detectada — estimando baralhos...")
+            # Acumular estimativa de baralhos neste frame
+            self._deck_estimator.add_frame(img)
+        else:
+            if self._in_shuffle:
+                # Mistura terminou → consolidar estimativa
+                self._in_shuffle = False
+                estimate = self._deck_estimator.consolidate()
+                if estimate is not None:
+                    self.last_deck_estimate = estimate
+                    print(f"[EvolutionDetector] {estimate}")
+                    if self.on_deck_estimate:
+                        self.on_deck_estimate(estimate)
+
+        # ── New round ──────────────────────────────────────────────────
         if frame.new_round_detected and self.on_new_round:
             self._prev_cards.clear()
             self.on_new_round()
 
-        # Report new cards
+        # ── Report new cards ───────────────────────────────────────────
         for det in frame.cards_detected:
             key = f"{det.rank}{det.suit}"
             if key not in self._prev_cards and det.confidence >= self.CONFIDENCE_THRESHOLD:
@@ -209,8 +240,8 @@ class EvolutionDetector:
 
         frame.frame_hash = frame_hash
 
-        # 2. Detect new round text
-        frame.new_round_detected = self._detect_new_round(img)
+        # 2. Detect round/shuffle text overlays
+        frame.new_round_detected, frame.shuffle_detected = self._detect_overlays(img)
 
         # 3. Find card regions using color segmentation
         card_regions = self._find_card_regions(img)
@@ -338,33 +369,45 @@ class EvolutionDetector:
             bounding_box=bbox,
         )
 
-    def _detect_new_round(self, img: np.ndarray) -> bool:
+    def _detect_overlays(self, img: np.ndarray) -> tuple:
         """
-        Detect "PRÓXIMO JOGO EM BREVE" text — indicates a new round starting.
-        Uses a simple brightness check in the center of the screen where
-        the text overlay appears.
+        Detecta overlays de texto no centro da tela:
+          - "PRÓXIMO JOGO EM BREVE" → nova rodada começando
+          - "MISTURA EM ANDAMENTO"  → mistura em progresso (todos baralhos visíveis)
+
+        Retorna (new_round: bool, shuffle: bool).
         """
         if not TESS_AVAILABLE:
-            return False
+            return False, False
         h, w = img.shape[:2]
-        # Check center band where the text typically appears
+        # Overlay aparece na faixa central da tela
         center_band = img[h//3:h//2, w//4:3*w//4]
-        # Check if there's bright white text in this area
         gray = cv2.cvtColor(center_band, cv2.COLOR_RGB2GRAY)
-        bright_pixels = np.sum(gray > 220)
-        total = gray.size
-        bright_ratio = bright_pixels / total
+        bright_ratio = np.sum(gray > 210) / gray.size
 
-        if bright_ratio > 0.05:
-            # Enough bright pixels — try to OCR
+        new_round = False
+        shuffle   = False
+
+        if bright_ratio > 0.04:
             try:
-                pil = Image.fromarray(center_band)
+                pil  = Image.fromarray(center_band)
                 text = pytesseract.image_to_string(pil, config="--psm 6").upper()
-                keywords = ["PROXIMO", "PRÓXIMO", "BREVE", "NEXT GAME", "PLACE YOUR BETS"]
-                return any(k in text for k in keywords)
+
+                new_round_kw = ["PROXIMO", "PRÓXIMO", "BREVE", "NEXT GAME",
+                                "PLACE YOUR BETS", "FAÇA SUAS"]
+                shuffle_kw   = ["MISTURA", "SHUFFLING", "EMBARALH"]
+
+                new_round = any(k in text for k in new_round_kw)
+                shuffle   = any(k in text for k in shuffle_kw)
             except Exception:
                 pass
-        return False
+
+        return new_round, shuffle
+
+    # mantém compatibilidade com chamadas legadas
+    def _detect_new_round(self, img: np.ndarray) -> bool:
+        new_round, _ = self._detect_overlays(img)
+        return new_round
 
     def _detect_score_overlays(self, img: np.ndarray) -> List[int]:
         """

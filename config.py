@@ -11,14 +11,17 @@ from typing import Literal
 
 
 # Casino rule set keys (see ml/advantage_calc.py for full definitions)
-# Choose the one that matches where you'll be playing.
-CASINO_RULE_KEY: str = "typical_6d_h17_das"
+# "evolution_8d_s17_das" = Evolution Gaming Blackjack A confirmado nos prints:
+#   • "Dealer must stand on 17" → S17
+#   • "BLACKJACK PAYS 3:2"
+#   • Estimativa visual: 8 baralhos
+CASINO_RULE_KEY: str = "evolution_8d_s17_das"
 
 
 @dataclass
 class ShoeConfig:
     """Configuration for the card shoe (a caixinha de cartas)."""
-    num_decks: int = 6          # Standard casino: 4, 6, or 8 decks
+    num_decks: int = 8          # Evolution Gaming Blackjack A: 8 baralhos (estimado visualmente)
     penetration: float = 0.75   # Fraction of shoe dealt before reshuffle (0.5 to 0.85)
     # NOTE: Physical shoe size (~30cm) does not affect counting —
     # only num_decks and penetration matter algorithmically.
@@ -27,8 +30,8 @@ class ShoeConfig:
 @dataclass
 class BlackjackRules:
     """Standard Vegas/casino blackjack rules."""
-    blackjack_payout: float = 1.5   # 3:2 payout (some casinos pay 6:5 = 1.2, worse)
-    dealer_hits_soft17: bool = True  # H17 rule (more common, worse for player)
+    blackjack_payout: float = 1.5    # 3:2 payout (some casinos pay 6:5 = 1.2, worse)
+    dealer_hits_soft17: bool = False  # S17: dealer PARA no 17 mole (confirmado nos prints)
     double_after_split: bool = True  # DAS allowed
     resplit_aces: bool = False       # RSA not always allowed
     surrender_allowed: bool = True   # Late surrender
@@ -98,7 +101,7 @@ class CountingSystem:
     name: Literal["hi_lo", "ko", "hi_opt1", "hi_opt2", "omega2"] = "hi_opt1"
     # BSE for the casino you're playing at (used by Hi-Opt I/II advantage formula)
     # Overridden automatically if casino_rules_key is set in RainManConfig
-    bse: float = -0.54   # Default: typical 6-deck H17 game
+    bse: float = -0.43   # Evolution Gaming 8d S17 DAS (ponto de equilíbrio: TC ≈ +0.83)
 
 
 @dataclass
