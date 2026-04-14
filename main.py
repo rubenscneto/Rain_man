@@ -5,7 +5,9 @@ Main entry point.
 Usage
 -----
   python main.py --mode train       # Train on Monte Carlo data (first step)
-  python main.py --mode live        # Live play with screen reader
+  python main.py --mode watch       # Live watch: OCR + hotkeys (Evolution Gaming)
+  python main.py --mode calibrate   # Calibrate screen capture region
+  python main.py --mode live        # Live play with screen reader (legacy)
   python main.py --mode manual      # Live play with manual card input
   python main.py --mode stats       # Show training statistics
   python main.py --mode demo        # Quick demo simulation
@@ -13,7 +15,7 @@ Usage
   Options:
     --decks N          Number of decks in shoe (default: 6)
     --penetration F    Penetration 0.5–0.85 (default: 0.75)
-    --system SYSTEM    Counting system: hi_lo, ko, omega2 (default: hi_lo)
+    --system SYSTEM    Counting system: hi_lo, ko, hi_opt1, hi_opt2, omega2 (default: hi_opt1)
     --bankroll N       Starting bankroll in units (default: 1000)
     --min-bet N        Table minimum bet (default: 10)
     --max-bet N        Table maximum bet (default: 200)
@@ -363,6 +365,67 @@ def mode_manual(cfg: RainManConfig) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Mode: WATCH (OCR + hotkeys — Evolution Gaming)
+# ---------------------------------------------------------------------------
+
+def mode_watch(cfg: RainManConfig) -> None:
+    """
+    Watch mode: combines Evolution Gaming OCR + instant hotkey input.
+
+    Two threads run simultaneously:
+      1. Screen capture thread — auto-detects cards via OCR every 300ms
+      2. Hotkey listener thread — user can press single keys for instant input
+
+    Rich live dashboard shows count, EV, bet recommendation in real time.
+
+    First run `--mode calibrate` to set the screen capture region.
+    """
+    from ui.watch_mode import WatchSession
+
+    print_header()
+    print_rule("WATCH MODE — Evolution Gaming OCR + Hotkeys")
+
+    shoe = Shoe(num_decks=cfg.shoe.num_decks, penetration=cfg.shoe.penetration)
+    counter = make_counter(cfg.counting.name, shoe, bse=cfg.counting.bse)
+    strategy = _load_strategy(cfg)
+
+    session = WatchSession(
+        counter=counter,
+        strategy=strategy,
+        config=cfg,
+        bankroll=cfg.betting.bankroll,
+    )
+    session.run()
+
+
+# ---------------------------------------------------------------------------
+# Mode: CALIBRATE (screen region setup)
+# ---------------------------------------------------------------------------
+
+def mode_calibrate(cfg: RainManConfig) -> None:
+    """
+    Interactive screen calibration wizard.
+
+    Takes a full screenshot, saves it to /tmp/rainman_calibration.png,
+    then prompts for the x/y/width/height of the game window area.
+    Saves the region to screen_region.json for use in watch mode.
+
+    Run this once before your first --mode watch session.
+    """
+    from screen_reader.calibrate import run_calibration
+
+    print_header()
+    print_rule("SCREEN CALIBRATION")
+    region = run_calibration()
+    if console:
+        console.print(f"\n[green]Calibration complete.[/green] Region: {region}")
+        console.print("[dim]Now run: python main.py --mode watch[/dim]")
+    else:
+        print(f"\nCalibration complete. Region: {region}")
+        print("Now run: python main.py --mode watch")
+
+
+# ---------------------------------------------------------------------------
 # Mode: STATS
 # ---------------------------------------------------------------------------
 
@@ -533,7 +596,8 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--mode", choices=["train", "live", "manual", "stats", "demo"],
+    parser.add_argument("--mode",
+                        choices=["train", "watch", "calibrate", "live", "manual", "stats", "demo"],
                         default=None, help="Operation mode")
     parser.add_argument("--decks", type=int, default=6,
                         help="Number of decks in shoe (default: 6)")
@@ -562,11 +626,23 @@ def main():
     if mode is None:
         # Interactive mode selection
         choice = ask_mode()
-        mode_map = {"1": "train", "2": "live", "3": "manual", "4": "stats", "5": "demo"}
+        mode_map = {
+            "1": "train",
+            "2": "watch",
+            "3": "calibrate",
+            "4": "live",
+            "5": "manual",
+            "6": "stats",
+            "7": "demo",
+        }
         mode = mode_map.get(choice, "manual")
 
     if mode == "train":
         mode_train(cfg)
+    elif mode == "watch":
+        mode_watch(cfg)
+    elif mode == "calibrate":
+        mode_calibrate(cfg)
     elif mode == "live" and not args.no_screen:
         mode_live(cfg)
     elif mode == "manual" or args.no_screen:
