@@ -81,7 +81,8 @@ _CONTROL_KEYS = {
     "i": "insurance",
     "b": "bet",
     "c": "count",
-    "d": "debug",
+    "m": "hand_mode",    # Minha mão — próximas cartas vão para a SUA mão
+    "d": "dealer_mode",  # Dealer — próxima carta é a do dealer
 }
 
 
@@ -167,21 +168,27 @@ class HotkeyListener:
             return
 
     def _print_help(self) -> None:
-        print("\n" + "─" * 50)
-        print("  HOTKEY MODE — single key per card")
-        print("─" * 50)
-        print("  3 4 5 6     → +1 count  (small cards)")
-        print("  2 7 8 9     →  0 count  (neutral)")
-        print("  t (or 0)    → -1 count  (Ten/J/Q/K)")
-        print("  a           →  0 count  (Ace — side counted)")
-        print("─" * 50)
-        print("  n / Space   → Next hand")
-        print("  s           → Shoe reshuffled")
-        print("  i           → Insurance?")
-        print("  b           → Show bet recommendation")
-        print("  c           → Show current count")
-        print("  Esc         → Quit")
-        print("─" * 50 + "\n")
+        print("\n" + "─" * 52)
+        print("  RAINMAN — MODO HOTKEY")
+        print("─" * 52)
+        print("  CARTAS (pressione a tecla do valor):")
+        print("  3 4 5 6 7 8 9   → valor da carta")
+        print("  t (ou 0)        → 10 / J / Q / K")
+        print("  a               → Ás")
+        print("─" * 52)
+        print("  CONSELHEIRO DE MÃO:")
+        print("  m               → Minha mão (ative, depois tecle suas cartas)")
+        print("  d               → Carta do dealer (ative, depois tecle a carta)")
+        print("  → Com mão + dealer visível, aparece a ação recomendada")
+        print("─" * 52)
+        print("  CONTROLES:")
+        print("  n / Espaço      → Próxima mão")
+        print("  s               → Embaralhamento (zera contagem)")
+        print("  i               → Devo fazer seguro?")
+        print("  b               → Aposta recomendada")
+        print("  c               → Mostrar contagem")
+        print("  Esc             → Sair")
+        print("─" * 52 + "\n")
 
     @property
     def is_running(self) -> bool:

@@ -83,6 +83,15 @@ class WatchSession:
         # Última estimativa de baralhos (do detector durante mistura)
         self._deck_estimate_str: str = ""
 
+        # ── Conselheiro de mão ─────────────────────────────────────────
+        # Pressione 'm' para ativar modo minha-mão, depois tecle suas cartas.
+        # Pressione 'd' para informar a carta visível do dealer.
+        # O painel mostrará a ação recomendada (Pedir / Parar / Dobrar...).
+        self.player_hand: List[Card] = []      # Cartas da SUA mão
+        self.dealer_upcard: Optional[Card] = None  # Carta visível do dealer
+        self._hand_mode: bool = False   # True = próximas cartas vão para player_hand
+        self._dealer_mode: bool = False # True = próxima carta é o dealer_upcard
+
         # OCR detector
         self._ocr_thread: Optional[threading.Thread] = None
         self._ocr_available = False
@@ -131,11 +140,21 @@ class WatchSession:
     def _on_card_hotkey(self, card: Card) -> None:
         """Called by hotkey listener when user presses a card key."""
         with self._lock:
+            # Sempre conta a carta normalmente
             self.counter.see_card(card)
             self.cards_seen.append(card)
             self.cards_this_round.append(card)
             self.last_source = "KEY"
             self.last_card_str = str(card)
+
+            # Modo dealer: registra como carta visível do dealer
+            if self._dealer_mode:
+                self.dealer_upcard = card
+                self._dealer_mode = False   # auto-desativa após 1 carta
+
+            # Modo minha mão: adiciona à mão do jogador
+            elif self._hand_mode:
+                self.player_hand.append(card)
 
     def _on_new_round(self) -> None:
         """Called when OCR detects a new round starting."""
@@ -157,15 +176,34 @@ class WatchSession:
             if cmd == "next_hand":
                 self.cards_this_round.clear()
                 self.round_num += 1
+                # Limpa mão e modos ao iniciar nova rodada
+                self.player_hand.clear()
+                self.dealer_upcard = None
+                self._hand_mode = False
+                self._dealer_mode = False
+
             elif cmd == "shuffle":
-                from simulator.deck import Shoe
-                # Reset counter
                 self.counter.reset()
                 self.cards_seen.clear()
                 self.cards_this_round.clear()
+                self.player_hand.clear()
+                self.dealer_upcard = None
+                self._hand_mode = False
+                self._dealer_mode = False
                 self.round_num = 0
                 self.last_source = "CTRL"
                 self.last_card_str = "SHOE RESET"
+
+            elif cmd == "hand_mode":
+                # Alterna modo minha-mão (desativa dealer_mode se ativo)
+                self._hand_mode = not self._hand_mode
+                self._dealer_mode = False
+
+            elif cmd == "dealer_mode":
+                # Ativa modo dealer para a próxima carta (desativa minha-mão)
+                self._dealer_mode = not self._dealer_mode
+                self._hand_mode = False
+
             elif cmd == "quit":
                 self._running = False
 
@@ -223,6 +261,74 @@ class WatchSession:
                 break
 
     # ------------------------------------------------------------------
+    # Conselheiro de estratégia
+    # ------------------------------------------------------------------
+
+    def _get_strategy_advice(self) -> str:
+        """
+        Retorna a ação recomendada para a mão atual do jogador vs dealer.
+        Usa estratégia básica + desvios de índice do Hi-Opt I.
+        Chamado com o lock JÁ adquirido.
+        """
+        if len(self.player_hand) < 2 or self.dealer_upcard is None:
+            return ""
+
+        try:
+            from simulator.blackjack_game import basic_strategy_action, Action
+            from simulator.deck import Hand as BjHand
+
+            # Monta o objeto Hand com as cartas do jogador
+            hand = BjHand()
+            for card in self.player_hand:
+                hand.add_card(card)
+
+            action = basic_strategy_action(hand, self.dealer_upcard, self.config.rules)
+
+            # Traduz ação para português
+            _pt = {
+                Action.HIT:       ("PEDIR CARTA",   "yellow"),
+                Action.STAND:     ("PARAR",          "green"),
+                Action.DOUBLE:    ("DOBRAR APOSTA",  "cyan"),
+                Action.SPLIT:     ("DIVIDIR",        "magenta"),
+                Action.SURRENDER: ("RENDER (metade)","red"),
+            }
+            action_str, action_col = _pt.get(action, (str(action), "white"))
+
+            # Resumo da mão
+            total = hand.total
+            soft  = " mole" if hand.is_soft else ""
+            hand_cards = " ".join(
+                f"[{'red' if c.suit in ('♥','♦') else 'white'}]{c}[/]"
+                for c in self.player_hand
+            )
+            dealer_str = (
+                f"[{'red' if self.dealer_upcard.suit in ('♥','♦') else 'white'}]"
+                f"{self.dealer_upcard}[/]"
+            )
+
+            # Verifica desvio de índice do Hi-Opt I (se disponível)
+            index_note = ""
+            try:
+                if hasattr(self.counter, "get_hard_standing_action"):
+                    idx = self.counter.get_hard_standing_action(
+                        total, self.dealer_upcard
+                    )
+                    if idx is not None and idx != action_str:
+                        index_note = f"  [dim](TC{self.counter.true_count:+.1f} → {idx})[/dim]"
+            except Exception:
+                pass
+
+            return (
+                f"  Sua mão: {hand_cards} = [bold]{total}{soft}[/bold]  "
+                f"vs dealer {dealer_str}\n"
+                f"  ▶ [{action_col}][bold]{action_str}[/bold][/{action_col}]"
+                f"{index_note}"
+            )
+
+        except Exception:
+            return ""
+
+    # ------------------------------------------------------------------
     # Display rendering
     # ------------------------------------------------------------------
 
@@ -265,10 +371,10 @@ class WatchSession:
             # OCR status
             ocr_status = (
                 "[green]OCR ON[/green]" if self._ocr_available
-                else "[yellow]OCR OFF — hotkeys only[/yellow]"
+                else "[yellow]OCR OFF[/yellow]"
             )
 
-            # Deck estimate (shown after first shuffle)
+            # Deck estimate
             deck_str = (
                 f"  [dim]Baralhos estimados: {self._deck_estimate_str}[/dim]\n"
                 if self._deck_estimate_str else ""
@@ -278,24 +384,50 @@ class WatchSession:
             ins_advice = ""
             if hasattr(self.counter, "should_take_insurance"):
                 if self.counter.should_take_insurance():
-                    ins_advice = "\n  [bold green]TAKE INSURANCE (TC≥+3)[/bold green]"
+                    ins_advice = "\n  [bold green]★ FAZER SEGURO (TC≥+3)[/bold green]"
+
+            # ── Conselheiro de mão ────────────────────────────────────
+            advice_str = self._get_strategy_advice()
+
+            # Indicadores de modo ativo
+            hand_indicator = ""
+            if self._hand_mode:
+                hand_indicator = "  [bold yellow]► MODO MINHA MÃO (m)[/bold yellow]  tecle suas cartas\n"
+            elif self._dealer_mode:
+                hand_indicator = "  [bold cyan]► MODO DEALER (d)[/bold cyan]  tecle a carta do dealer\n"
+
+            # Bloco do conselheiro
+            if advice_str:
+                advice_block = (
+                    f"\n  ──────────────── CONSELHEIRO ─────────────────\n"
+                    f"{advice_str}\n"
+                    f"  ───────────────────────────────────────────────\n"
+                )
+            elif hand_indicator:
+                advice_block = f"\n{hand_indicator}"
+            else:
+                advice_block = (
+                    f"\n  [dim]Conselheiro: pressione [bold]m[/bold] (minha mão) "
+                    f"depois [bold]d[/bold] (dealer) para ver a ação recomendada[/dim]\n"
+                )
 
             text = Text.from_markup(
                 f"\n"
                 f"  [{tc_col}]{bar}[/{tc_col}]\n"
                 f"  RC: [bold]{rc:+d}[/bold]   "
                 f"TC: [{tc_col}]{tc:+.2f}[/{tc_col}]   "
-                f"Decks restantes: {decks:.1f}   "
-                f"Rodada #{self.round_num}\n\n"
+                f"Decks: {decks:.1f}   "
+                f"Rodada #{self.round_num}   {ocr_status}\n\n"
                 f"  [{ev_col}]EV: {ev:+.3%}[/{ev_col}]   "
                 f"[bold cyan]APOSTAR: ${rec.recommended_bet:.0f}[/bold cyan]"
                 f"  ({rec.bet_units:.0f} unidades)"
                 f"{ins_advice}\n\n"
                 f"  Cartas desta rodada: {round_str or '—'}\n"
-                f"  Última: {last_str}    {ocr_status}\n"
+                f"  Última: {last_str}\n"
                 f"{deck_str}"
-                f"\n  [dim]Teclas: 3-9=carta  t=10/J/Q/K  a=Ás  "
-                f"n=próxima  s=embaralhar  Esc=sair[/dim]\n"
+                f"{advice_block}"
+                f"\n  [dim]Cartas: 3-9 · t=10/J/Q/K · a=Ás  │  "
+                f"m=minha mão · d=dealer · n=próxima · s=embaralhar · Esc=sair[/dim]\n"
             )
 
             border = "green" if ev > 0 else "red"
