@@ -18,3 +18,6 @@ Pillow>=10.0
 # OCR card detection (live mode)
 pytesseract>=0.3.10
 opencv-python-headless>=4.8
+
+# Hotkey listener (watch mode — single-key input)
+pynput>=1.7
